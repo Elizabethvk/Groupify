@@ -1,0 +1,2 @@
+# Groupify
+Smart Bill Splitter
