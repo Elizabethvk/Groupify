@@ -12,13 +12,15 @@ import cv2
 import pytesseract
 
 from data_models import ProcessingMetrics
+from config import DEFAULT_MAX_WORKERS, OCR_PSM, OCR_LANGUAGES
+from constants import IMAGE_REGION_OVERLAP_PX
 from utils import validate_image_path
 
 
 class ParallelOCRProcessor:
     """Parallel OCR processing of receipt images"""
     
-    def __init__(self, num_workers: int = 4):
+    def __init__(self, num_workers: int = DEFAULT_MAX_WORKERS):
         self.num_workers = num_workers
         self.metrics = ProcessingMetrics()
         self.available_languages = self._check_languages()
@@ -36,7 +38,7 @@ class ParallelOCRProcessor:
     def _get_ocr_language(self) -> str:
         """Determine which OCR language to use"""
         if 'bul' in self.available_languages and 'eng' in self.available_languages:
-            return 'bul+eng'
+            return OCR_LANGUAGES
         elif 'bul' in self.available_languages:
             return 'bul'
         else:
@@ -70,7 +72,7 @@ class ParallelOCRProcessor:
         
         for i in range(self.num_workers):
             y_start = i * region_height
-            y_end = height if i == self.num_workers - 1 else (i + 1) * region_height + 50
+            y_end = height if i == self.num_workers - 1 else (i + 1) * region_height + IMAGE_REGION_OVERLAP_PX
             
             region = image.crop((0, y_start, width, min(y_end, height)))
             regions.append((i, region))
@@ -87,7 +89,7 @@ class ParallelOCRProcessor:
             text = pytesseract.image_to_string(
                 region_image,
                 lang=self._get_ocr_language(),
-                config='--psm 6'
+                config=f'--psm {OCR_PSM}'
             )
             print(f"  Worker {region_id + 1}: Complete ✓")
             return text

@@ -10,6 +10,7 @@ from ocr_processor import ParallelOCRProcessor
 from receipt_parser import ReceiptParser
 from bill_splitter import BillSplitter
 from utils import validate_image_path, try_parse_float, validate_menu_choice
+from constants import SETTLEMENT_EPSILON
 
 class GroupifyCLI:
     """Command-line interface for Groupify"""
@@ -61,13 +62,13 @@ class GroupifyCLI:
     
     def display_metrics(self):
         """Display processing metrics"""
-        m = self.processor.metrics
+        metrics = self.processor.metrics
         print("\n" + "="*50)
         print("🚀 PROCESSING METRICS")
         print("="*50)
-        print(f"Workers Used:     {m.workers_used}")
-        print(f"Processing Time:  {m.processing_time:.2f}s")
-        print(f"Speedup Factor:   {m.speedup_factor:.1f}x")
+        print(f"Workers Used:     {metrics.workers_used}")
+        print(f"Processing Time:  {metrics.processing_time:.2f}s")
+        print(f"Speedup Factor:   {metrics.speedup_factor:.1f}x")
         print(f"Items Detected:   {len(self.receipt.items) if self.receipt else 0}")
         print(f"Regions Processed: {m.regions_processed}")
     
@@ -180,8 +181,8 @@ class GroupifyCLI:
         if not settlements:
             print("\n🎉 Everyone paid equally - no settlements needed!")
         else:
-            for s in settlements:
-                print(f"{s.from_person:15} → {s.to_person:15} : {s.amount:7.2f} {s.currency}")
+            for settlement in settlements:
+                print(f"{settlement.from_person:15} → {settlement.to_person:15} : {settlement.amount:7.2f} {settlement.currency}")
         
         print("\n" + "-"*50)
         print("📊 SUMMARY")
@@ -194,7 +195,7 @@ class GroupifyCLI:
         print("💰 INDIVIDUAL SHARES")
         print("-"*50)
         for person, amount in self.splitter.balances.items():
-            print(f"{person:15} : {amount:7.2f} {self.receipt.currency}")
+            print(f"{person:15} : {float(amount):7.2f} {self.receipt.currency}")
     
     def add_tip(self):
         """Add tip to receipt"""
@@ -295,7 +296,7 @@ class GroupifyCLI:
                     'total_consumed': round(person_cost, 2),
                     'equal_share_owed': round(equal_share, 2),
                     'difference': round(person_cost - equal_share, 2),
-                    'status': 'creditor' if person_cost > equal_share + 0.01 else 'debtor' if person_cost < equal_share - 0.01 else 'balanced'
+                    'status': 'creditor' if person_cost > equal_share + float(SETTLEMENT_EPSILON) else 'debtor' if person_cost < equal_share - float(SETTLEMENT_EPSILON) else 'balanced'
                 }
             
             data['settlement_analysis']['detailed_breakdown'] = person_breakdown

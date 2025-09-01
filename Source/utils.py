@@ -8,6 +8,7 @@ import hashlib
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 import mimetypes
+from config import MAX_IMAGE_SIZE_BYTES, PROGRESS_BAR_LENGTH
 
 def validate_image_path(image_path: str) -> bool:
     """Comprehensive image path validation with security checks"""
@@ -34,13 +35,11 @@ def validate_image_path(image_path: str) -> bool:
             print(f"Path is not a file: {image_path}")
             return False
         
-        # File size validation (max 50MB)
-        max_size_bytes = 50 * 1024 * 1024
-        if path.stat().st_size > max_size_bytes:
-            print(f"File too large: {path.stat().st_size} bytes (max: {max_size_bytes})")
+        # File size validation configure
+        if path.stat().st_size > MAX_IMAGE_SIZE_BYTES:
+            print(f"File too large: {path.stat().st_size} bytes (max: {MAX_IMAGE_SIZE_BYTES})")
             return False
         
-        # Validate file extension
         allowed_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.gif', '.webp'}
         if path.suffix.lower() not in allowed_extensions:
             print(f"Unsupported file extension: {path.suffix}")
@@ -208,7 +207,7 @@ def create_progress_callback(total_steps: int, description: str = "Processing"):
     """Create a progress callback function for long operations"""
     def progress_callback(step: int, status: str = ""):
         percentage = (step / total_steps) * 100
-        bar_length = 30
+        bar_length = PROGRESS_BAR_LENGTH
         filled_length = int(bar_length * step // total_steps)
         bar = '█' * filled_length + '░' * (bar_length - filled_length)
         

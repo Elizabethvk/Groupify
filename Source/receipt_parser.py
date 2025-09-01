@@ -1,6 +1,6 @@
 """
-Receipt Parser module for Groupify - FIXED VERSION
-Parses OCR text to extract receipt items and totals with better Bulgarian support
+Receipt Parser module for Groupify
+Parses OCR text to extract receipt items and totals with Bulgarian support
 """
 
 import re
@@ -11,7 +11,16 @@ from typing import List
 from difflib import SequenceMatcher
 
 from data_models import Receipt, ReceiptItem
-from constants import TOTAL_SUM_PATTERNS, SKIP_WORDS
+from constants import (
+    TOTAL_SUM_PATTERNS,
+    SKIP_WORDS,
+    DUPLICATE_SIMILARITY_THRESHOLD,
+    ITEM_PRICE_MIN,
+    ITEM_PRICE_MAX,
+    FALLBACK_PRICE_MIN,
+    FALLBACK_PRICE_MAX,
+    TOTAL_MISMATCH_TOLERANCE,
+)
 
 class ReceiptParser:
     """Parses OCR text to extract receipt items and totals"""
@@ -43,7 +52,7 @@ class ReceiptParser:
         try:
             price = float(cleaned)
             # prices be reasonable
-            if 0.01 <= price <= 10000:
+            if ITEM_PRICE_MIN <= price <= ITEM_PRICE_MAX:
                 return price
         except (ValueError, TypeError):
             pass
@@ -97,9 +106,9 @@ class ReceiptParser:
                 continue
             
             is_similar_duplicate = False
-            for seen_line in seen_similar[-10:]:  # Check last 10 lines
+            for seen_line in seen_similar[-10:]:  # Check last N recent lines
                 similarity = self._similarity_score(line, seen_line)
-                if similarity > 0.95:
+                if similarity > DUPLICATE_SIMILARITY_THRESHOLD:
                     is_similar_duplicate = True
                     if self.debug:
                         print(f"  Skipping similar duplicate: '{line}' (similar to '{seen_line}', score: {similarity:.3f})")
@@ -303,10 +312,10 @@ class ReceiptParser:
                 price_match = re.search(r'([\d,\.]+)\s*(?:лв|Г|Б|BGN|\$|USD|€|EUR)?\s*$', line, re.IGNORECASE)
                 if price_match:
                     price = self._clean_price(price_match.group(1))
-                    if 1.0 <= price <= 500:
+                    if FALLBACK_PRICE_MIN <= price <= FALLBACK_PRICE_MAX:
                         name_part = line[:price_match.start()].strip()
-                        name_part = re.sub(r'^[\d\s\-\*]+', '', name_part).strip()  # Remove leading numbers
-                        name_part = re.sub(r'\s*[-–]\s*$', '', name_part).strip()  # Remove trailing dash
+                        name_part = re.sub(r'^[\d\s\-\*]+', '', name_part).strip()
+                        name_part = re.sub(r'\s*[-–]\s*$', '', name_part).strip()
                         
                         if len(name_part) > 2 and self._is_valid_item_name(name_part):
                             item = ReceiptItem(
@@ -330,7 +339,7 @@ class ReceiptParser:
         
         if self.receipt.items and self.receipt.total > 0:
             calculated_total = sum(item.price for item in self.receipt.items)
-            if abs(calculated_total - self.receipt.total) > 1.0:
+            if abs(calculated_total - self.receipt.total) > TOTAL_MISMATCH_TOLERANCE:
                 if self.debug:
                     print(f"  ⚠ Total mismatch: calculated {calculated_total:.2f} vs found {self.receipt.total:.2f}")
                     print(f"  This suggests possible duplicate items or parsing errors")

@@ -4,6 +4,7 @@ Data models for Groupify - Receipt processing and bill splitting
 
 from dataclasses import dataclass, field
 from typing import List
+from config import CURRENCY_DEFAULT
 
 @dataclass
 class ReceiptItem:
@@ -27,7 +28,7 @@ class Receipt:
     total: float = 0.0
     original_total: float = 0.0
     tip_amount: float = 0.0
-    currency: str = "BGN"
+    currency: str = CURRENCY_DEFAULT
     
     def add_tip(self, amount: float):
         """Add tip to the receipt"""
@@ -47,7 +48,7 @@ class Settlement:
     from_person: str
     to_person: str
     amount: float
-    currency: str = "BGN"
+    currency: str = CURRENCY_DEFAULT
 
 
 @dataclass

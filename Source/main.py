@@ -13,6 +13,7 @@ from ocr_processor import ParallelOCRProcessor
 from receipt_parser import ReceiptParser
 from cli_interface import GroupifyCLI
 from utils import validate_image_path
+from config import WORKERS_MIN, WORKERS_MAX
 
 def quick_process(image_path: str, workers: int = 4):
     """Quick processing mode - showing results only"""
@@ -78,9 +79,9 @@ Examples:
     
     args = parser.parse_args()
     
-    if args.workers < 1 or args.workers > 16:
-        print("⚠ Workers must be between 1 and 16")
-        args.workers = max(1, min(16, args.workers))
+    if args.workers < WORKERS_MIN or args.workers > WORKERS_MAX:
+        print(f"⚠ Workers must be between {WORKERS_MIN} and {WORKERS_MAX}")
+        args.workers = max(WORKERS_MIN, min(WORKERS_MAX, args.workers))
     
     if args.quick and args.image:
         if not validate_image_path(args.image):
