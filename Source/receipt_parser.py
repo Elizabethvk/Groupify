@@ -9,7 +9,7 @@ import time
 from typing import List, Tuple
 from difflib import SequenceMatcher
 from data_models import Receipt, ReceiptItem
-from constants import PATTERNS, SKIP_WORDS
+from constants import TOTAL_SUM_PATTERNS, SKIP_WORDS
 
 class ReceiptParser:
     """Parses OCR text to extract receipt items and totals"""
@@ -74,93 +74,165 @@ class ReceiptParser:
         
         return True
     
+    def _similarity_score(self, str1: str, str2: str) -> float:
+        """Calculate similarity score between two strings (0-1)"""
+        return SequenceMatcher(None, str1.lower(), str2.lower()).ratio()
+    
+    def _deduplicate_by_line_similarity(self, text: str) -> str:
+        """Remove duplicate lines that appear due to OCR overlapping regions"""
+        lines = text.split('\n')
+        unique_lines = []
+        seen_exact = set()
+        seen_similar = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            if line in seen_exact:
+                if self.debug:
+                    print(f"  Skipping exact duplicate: '{line}'")
+                continue
+            
+            is_similar_duplicate = False
+            for seen_line in seen_similar[-10:]:  # Check last 10 lines
+                similarity = self._similarity_score(line, seen_line)
+                if similarity > 0.95:
+                    is_similar_duplicate = True
+                    if self.debug:
+                        print(f"  Skipping similar duplicate: '{line}' (similar to '{seen_line}', score: {similarity:.3f})")
+                    break
+            
+            if not is_similar_duplicate:
+                unique_lines.append(line)
+                seen_exact.add(line)
+                seen_similar.append(line)
+        
+        return '\n'.join(unique_lines)
+    
     def _extract_items_from_line(self, line: str) -> List[ReceiptItem]:
         """Extract items from a single line using multiple patterns"""
         items = []
-        original_line = line
         line = line.strip()
         
         if not line:
             return items
-        
+
         if self.debug:
             print(f"  Analyzing line: '{line}'")
         
-        for pattern_name in ['bg_item_qty', 'en_item_qty']:
-            match = re.search(self.PATTERNS[pattern_name], line, re.IGNORECASE)
-            if match:
-                name = match.group(1).strip()
-                quantity = int(match.group(2))
-                unit_price = self._clean_price(match.group(3))
-                total_price = self._clean_price(match.group(4))
-                
-                if self._is_valid_item_name(name) and total_price > 0:
-                    # Validate that quantity * unit_price ≈ total_price
-                    expected_total = quantity * unit_price
-                    if abs(expected_total - total_price) < 0.5:
-                        item = ReceiptItem(
-                            id=self._generate_item_id(),
-                            name=name,
-                            quantity=quantity,
-                            unit_price=unit_price,
-                            price=total_price
-                        )
-                        items.append(item)
-                        if self.debug:
-                            print(f"    ✓ Found qty item: {name} {quantity}x{unit_price:.2f} = {total_price:.2f}")
-                        return items
+        if any(word in line.upper() for word in ['ОБЩО:', 'TOTAL:', 'СУМА:', 'СМЕТКА']):
+            return items
         
-        for pattern_name in ['bg_item_simple', 'en_item_simple']:
-            match = re.search(self.PATTERNS[pattern_name], line, re.IGNORECASE)
-            if match:
-                name = match.group(1).strip()
-                price = self._clean_price(match.group(2))
-                
-                if self._is_valid_item_name(name) and price > 0:
+        # Pattern 1: Quantity x Price = Total
+        qty_match = re.search(r'(.+?)\s*[xх×](\d+)\s*[-\s]*([\d,\.]+)\s*(?:лв|Г|Б|BGN|\$|USD|€|EUR)?', line, re.IGNORECASE)
+        if qty_match:
+            name = qty_match.group(1).strip()
+            quantity = int(qty_match.group(2))
+            unit_price = self._clean_price(qty_match.group(3))
+            total_price = unit_price * quantity
+            
+            if self._is_valid_item_name(name) and unit_price > 0:
+                item = ReceiptItem(
+                    id=self._generate_item_id(),
+                    name=name,
+                    quantity=quantity,
+                    unit_price=unit_price,
+                    price=total_price
+                )
+                items.append(item)
+                if self.debug:
+                    print(f"    ✓ Found qty item (xN format): {name} {quantity}x{unit_price:.2f} = {total_price:.2f}")
+                return items
+
+        # Pattern 2: Number Item - Price
+        num_item_match = re.search(r'^(\d+)\s+(.+?)\s*[-–]\s*([\d,\.]+)\s*(?:лв|Г|Б|BGN|\$|USD|€|EUR)?', line, re.IGNORECASE)
+        if num_item_match:
+            quantity = int(num_item_match.group(1))
+            name = num_item_match.group(2).strip()
+            total_price = self._clean_price(num_item_match.group(3))
+            unit_price = total_price / quantity if quantity > 0 else total_price
+            
+            if self._is_valid_item_name(name) and total_price > 0:
+                item = ReceiptItem(
+                    id=self._generate_item_id(),
+                    name=name,
+                    quantity=quantity,
+                    unit_price=unit_price,
+                    price=total_price
+                )
+                items.append(item)
+                if self.debug:
+                    print(f"    ✓ Found numbered item: {name} {quantity}x{unit_price:.2f} = {total_price:.2f}")
+                return items
+
+        # Pattern 3: Item Qty x UnitPrice Total
+        traditional_match = re.search(r'(.+?)\s+(\d+)\s*[xх×]\s*([\d,\.]+)\s+([\d,\.]+)', line, re.IGNORECASE)
+        if traditional_match:
+            name = traditional_match.group(1).strip()
+            quantity = int(traditional_match.group(2))
+            unit_price = self._clean_price(traditional_match.group(3))
+            total_price = self._clean_price(traditional_match.group(4))
+            
+            if self._is_valid_item_name(name) and total_price > 0:
+                expected_total = quantity * unit_price
+                if abs(expected_total - total_price) < 0.5:
                     item = ReceiptItem(
                         id=self._generate_item_id(),
                         name=name,
-                        quantity=1,
-                        unit_price=price,
-                        price=price
+                        quantity=quantity,
+                        unit_price=unit_price,
+                        price=total_price
                     )
                     items.append(item)
                     if self.debug:
-                        print(f"    ✓ Found simple item: {name} = {price:.2f}")
+                        print(f"    ✓ Found traditional item: {name} {quantity}x{unit_price:.2f} = {total_price:.2f}")
                     return items
-        
-        price_matches = re.findall(r'[\d,\.]+', line)
-        if len(price_matches) >= 3:
-            try:
-                qty_part = line.split()[0]
-                if qty_part.isdigit():
-                    quantity = int(qty_part)
-                    prices = [self._clean_price(p) for p in price_matches[-2:]]  # Last two numbers
-                    if all(p > 0 for p in prices):
-                        unit_price, total_price = prices
-                        if abs(quantity * unit_price - total_price) < 0.5:
-                            name_part = re.sub(r'^\d+\s*[xх×]?\s*', '', line)
-                            name_part = re.sub(r'[\d,\.]+\s*(?:лв|Г|Б|BGN|\$|USD|€|EUR)?\s*$', '', name_part).strip()
-                            
-                            if self._is_valid_item_name(name_part):
-                                item = ReceiptItem(
-                                    id=self._generate_item_id(),
-                                    name=name_part,
-                                    quantity=quantity,
-                                    unit_price=unit_price,
-                                    price=total_price
-                                )
-                                items.append(item)
-                                if self.debug:
-                                    print(f"    ✓ Found multi-price item: {name_part} {quantity}x{unit_price:.2f} = {total_price:.2f}")
-            except:
-                pass
-        
+
+        # Pattern 4: Item - Price
+        simple_match = re.search(r'^(.+?)\s*[-–]\s*([\d,\.]+)\s*(?:лв|Г|Б|BGN|\$|USD|€|EUR)?', line, re.IGNORECASE)
+        if simple_match:
+            name = simple_match.group(1).strip()
+            price = self._clean_price(simple_match.group(2))
+            
+            if self._is_valid_item_name(name) and price > 0:
+                item = ReceiptItem(
+                    id=self._generate_item_id(),
+                    name=name,
+                    quantity=1,
+                    unit_price=price,
+                    price=price
+                )
+                items.append(item)
+                if self.debug:
+                    print(f"    ✓ Found simple item: {name} = {price:.2f}")
+                return items
+
+        # Pattern 5: Simple Item Price
+        no_dash_match = re.search(r'^(.+?)\s+([\d,\.]+)\s*(?:лв|Г|Б|BGN|\$|USD|€|EUR)?\s*$', line, re.IGNORECASE)
+        if no_dash_match:
+            name = no_dash_match.group(1).strip()
+            price = self._clean_price(no_dash_match.group(2))
+            
+            if self._is_valid_item_name(name) and price > 0:
+                item = ReceiptItem(
+                    id=self._generate_item_id(),
+                    name=name,
+                    quantity=1,
+                    unit_price=price,
+                    price=price
+                )
+                items.append(item)
+                if self.debug:
+                    print(f"    ✓ Found no-dash item: {name} = {price:.2f}")
+                return items
+
         return items
     
     def _find_total(self, text: str) -> float:
         """Find the total amount in the receipt"""
-        for pattern in self.PATTERNS['total_patterns']:
+        for pattern in self.TOTAL_SUM_PATTERNS:
             matches = re.finditer(pattern, text, re.IGNORECASE | re.MULTILINE)
             for match in matches:
                 total = self._clean_price(match.group(1))
@@ -185,51 +257,6 @@ class ReceiptParser:
         else:
             return 'BGN'
     
-    def _similarity_score(self, str1: str, str2: str) -> float:
-        """Calculate similarity score between two strings (0-1)"""
-        return SequenceMatcher(None, str1.lower(), str2.lower()).ratio()
-    
-    def _merge_similar_items(self, items: List[ReceiptItem]) -> List[ReceiptItem]:
-        """Merge items that are likely duplicates (from OCR errors or overlapping regions)"""
-        if len(items) <= 1:
-            return items
-        
-        merged = []
-        processed = set()
-        
-        for i, item1 in enumerate(items):
-            if i in processed:
-                continue
-            
-            current_item = ReceiptItem(
-                id=item1.id,
-                name=item1.name,
-                quantity=item1.quantity,
-                unit_price=item1.unit_price,
-                price=item1.price,
-                assigned_to=item1.assigned_to.copy()
-            )
-            
-            # Look for duplicates
-            for j, item2 in enumerate(items[i+1:], start=i+1):
-                if j in processed:
-                    continue
-                
-                name_similarity = self._similarity_score(item1.name, item2.name)
-                price_similarity = abs(item1.price - item2.price) < 0.5
-                
-                if name_similarity > 0.85 and price_similarity:
-                    current_item.quantity += item2.quantity
-                    current_item.price = current_item.unit_price * current_item.quantity
-                    processed.add(j)
-                    if self.debug:
-                        print(f"  Merged similar items: '{item1.name}' + '{item2.name}'")
-            
-            merged.append(current_item)
-            processed.add(i)
-        
-        return merged
-    
     def parse(self, ocr_text: str) -> Receipt:
         """Parse OCR text to extract receipt items and total"""
         if self.debug:
@@ -239,11 +266,18 @@ class ReceiptParser:
         self.receipt = Receipt()
         self.item_id_counter = 0
         
-        self.receipt.currency = self._detect_currency(ocr_text)
+        cleaned_text = self._deduplicate_by_line_similarity(ocr_text)
+        if self.debug:
+            lines_before = len([l for l in ocr_text.split('\n') if l.strip()])
+            lines_after = len([l for l in cleaned_text.split('\n') if l.strip()])
+            if lines_before != lines_after:
+                print(f"Deduplicated lines: {lines_before} → {lines_after}")
+        
+        self.receipt.currency = self._detect_currency(cleaned_text)
         if self.debug:
             print(f"Detected currency: {self.receipt.currency}")
         
-        lines = ocr_text.split('\n')
+        lines = cleaned_text.split('\n')
         all_items = []
         
         for line_num, line in enumerate(lines, 1):
@@ -253,24 +287,25 @@ class ReceiptParser:
             items = self._extract_items_from_line(line)
             all_items.extend(items)
         
-        if all_items:
-            self.receipt.items = self._merge_similar_items(all_items)
-        else:
+        self.receipt.items = all_items
+        
+        if not self.receipt.items:
             if self.debug:
                 print("  ⚠ No items found with current patterns")
                 print("  💡 Trying fallback extraction...")
             
             for line in lines:
                 line = line.strip()
-                if not line:
+                if not line or any(word in line.upper() for word in ['ОБЩО:', 'TOTAL:', 'СУМА:', 'СМЕТКА']):
                     continue
                 
-                price_matches = re.findall(r'([\d,\.]+)', line)
-                for price_str in price_matches:
-                    price = self._clean_price(price_str)
+                price_match = re.search(r'([\d,\.]+)\s*(?:лв|Г|Б|BGN|\$|USD|€|EUR)?\s*$', line, re.IGNORECASE)
+                if price_match:
+                    price = self._clean_price(price_match.group(1))
                     if 1.0 <= price <= 500:
-                        name_part = line.split(price_str)[0].strip()
+                        name_part = line[:price_match.start()].strip()
                         name_part = re.sub(r'^[\d\s\-\*]+', '', name_part).strip()  # Remove leading numbers
+                        name_part = re.sub(r'\s*[-–]\s*$', '', name_part).strip()  # Remove trailing dash
                         
                         if len(name_part) > 2 and self._is_valid_item_name(name_part):
                             item = ReceiptItem(
@@ -283,16 +318,21 @@ class ReceiptParser:
                             self.receipt.items.append(item)
                             if self.debug:
                                 print(f"    ⚡ Fallback item: {name_part} = {price:.2f}")
-                            break
         
-        # Find total
-        self.receipt.total = self._find_total(ocr_text)
+        self.receipt.total = self._find_total(cleaned_text)
         self.receipt.original_total = self.receipt.total
         
         if self.receipt.total == 0 and self.receipt.items:
             self.receipt.calculate_total()
             if self.debug:
                 print(f"  Calculated total from items: {self.receipt.total:.2f}")
+        
+        if self.receipt.items and self.receipt.total > 0:
+            calculated_total = sum(item.price for item in self.receipt.items)
+            if abs(calculated_total - self.receipt.total) > 1.0:
+                if self.debug:
+                    print(f"  ⚠ Total mismatch: calculated {calculated_total:.2f} vs found {self.receipt.total:.2f}")
+                    print(f"  This suggests possible duplicate items or parsing errors")
         
         if self.debug:
             print(f"\n📊 Parsing Results:")
@@ -302,6 +342,6 @@ class ReceiptParser:
             if self.receipt.items:
                 print("  Items:")
                 for item in self.receipt.items:
-                    print(f"    • {item.name}: {item.price:.2f}")
+                    print(f"    • {item.name}: {item.quantity}x{item.unit_price:.2f} = {item.price:.2f}")
         
         return self.receipt
