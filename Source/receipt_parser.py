@@ -1,11 +1,12 @@
+#!/usr/bin/env python3
 """
-Receipt Parser module for Groupify
-Parses OCR text to extract receipt items and totals
+Receipt Parser module for Groupify - FIXED VERSION
+Parses OCR text to extract receipt items and totals with better Bulgarian support
 """
 
 import re
 import time
-from typing import List
+from typing import List, Tuple
 from difflib import SequenceMatcher
 from data_models import Receipt, ReceiptItem
 from constants import PATTERNS, SKIP_WORDS
@@ -16,7 +17,7 @@ class ReceiptParser:
     def __init__(self):
         self.receipt = Receipt()
         self.item_id_counter = 0
-        self.raw_items = []
+        self.debug = True
     
     def _generate_item_id(self) -> str:
         """Generate unique item ID"""
@@ -25,69 +26,173 @@ class ReceiptParser:
     
     def _clean_price(self, price_str: str) -> float:
         """Clean and convert price string to float"""
-        price_str = re.sub(r'[^\d,\.]', '', price_str)
-        price_str = price_str.replace(',', '.')
-        try:
-            return float(price_str)
-        except:
+        if not price_str:
             return 0.0
-
-    def _normalize_item_name(self, name: str) -> str:
-        """Normalize item name for comparison"""
-        normalized = ' '.join(name.lower().split())
-        normalized = re.sub(r'[^\w\s\-а-я]', '', normalized)
+        
+        # Remove non-digit, non-decimal characters
+        cleaned = re.sub(r'[^\d,\.]', '', str(price_str))
+        
+        # European format (comma as decimal separator)
+        if ',' in cleaned and '.' in cleaned:
+            cleaned = cleaned.replace('.', '').replace(',', '.')
+        elif ',' in cleaned and cleaned.count(',') == 1:
+            if len(cleaned.split(',')[1]) <= 2:
+                cleaned = cleaned.replace(',', '.')
+        
+        try:
+            price = float(cleaned)
+            # prices be reasonable
+            if 0.01 <= price <= 10000:
+                return price
+        except (ValueError, TypeError):
+            pass
+        
+        return 0.0
+    
+    def _normalize_text(self, text: str) -> str:
+        """Normalize text for better comparison"""
+        normalized = ' '.join(text.lower().split())
+        normalized = re.sub(r'[^\w\sа-я]', ' ', normalized)
         return normalized.strip()
     
     def _is_valid_item_name(self, name: str) -> bool:
-        """Check if the name is likely a valid item"""
-        if not name or len(name) < 2:
+        """Check if the name is likely a valid menu item"""
+        if not name or len(name.strip()) < 2:
             return False
         
-        name_upper = name.upper()
+        normalized_name = self._normalize_text(name)
+        
         for skip_word in self.SKIP_WORDS:
-            if skip_word in name_upper:
+            if skip_word in normalized_name:
                 return False
         
         if not re.search(r'[a-zA-Zа-яА-Я]', name):
             return False
         
+        if len(re.sub(r'[\d\s\.\,\-]', '', name)) < 2:
+            return False
+        
         return True
+    
+    def _extract_items_from_line(self, line: str) -> List[ReceiptItem]:
+        """Extract items from a single line using multiple patterns"""
+        items = []
+        original_line = line
+        line = line.strip()
+        
+        if not line:
+            return items
+        
+        if self.debug:
+            print(f"  Analyzing line: '{line}'")
+        
+        for pattern_name in ['bg_item_qty', 'en_item_qty']:
+            match = re.search(self.PATTERNS[pattern_name], line, re.IGNORECASE)
+            if match:
+                name = match.group(1).strip()
+                quantity = int(match.group(2))
+                unit_price = self._clean_price(match.group(3))
+                total_price = self._clean_price(match.group(4))
+                
+                if self._is_valid_item_name(name) and total_price > 0:
+                    # Validate that quantity * unit_price ≈ total_price
+                    expected_total = quantity * unit_price
+                    if abs(expected_total - total_price) < 0.5:
+                        item = ReceiptItem(
+                            id=self._generate_item_id(),
+                            name=name,
+                            quantity=quantity,
+                            unit_price=unit_price,
+                            price=total_price
+                        )
+                        items.append(item)
+                        if self.debug:
+                            print(f"    ✓ Found qty item: {name} {quantity}x{unit_price:.2f} = {total_price:.2f}")
+                        return items
+        
+        for pattern_name in ['bg_item_simple', 'en_item_simple']:
+            match = re.search(self.PATTERNS[pattern_name], line, re.IGNORECASE)
+            if match:
+                name = match.group(1).strip()
+                price = self._clean_price(match.group(2))
+                
+                if self._is_valid_item_name(name) and price > 0:
+                    item = ReceiptItem(
+                        id=self._generate_item_id(),
+                        name=name,
+                        quantity=1,
+                        unit_price=price,
+                        price=price
+                    )
+                    items.append(item)
+                    if self.debug:
+                        print(f"    ✓ Found simple item: {name} = {price:.2f}")
+                    return items
+        
+        price_matches = re.findall(r'[\d,\.]+', line)
+        if len(price_matches) >= 3:
+            try:
+                qty_part = line.split()[0]
+                if qty_part.isdigit():
+                    quantity = int(qty_part)
+                    prices = [self._clean_price(p) for p in price_matches[-2:]]  # Last two numbers
+                    if all(p > 0 for p in prices):
+                        unit_price, total_price = prices
+                        if abs(quantity * unit_price - total_price) < 0.5:
+                            name_part = re.sub(r'^\d+\s*[xх×]?\s*', '', line)
+                            name_part = re.sub(r'[\d,\.]+\s*(?:лв|Г|Б|BGN|\$|USD|€|EUR)?\s*$', '', name_part).strip()
+                            
+                            if self._is_valid_item_name(name_part):
+                                item = ReceiptItem(
+                                    id=self._generate_item_id(),
+                                    name=name_part,
+                                    quantity=quantity,
+                                    unit_price=unit_price,
+                                    price=total_price
+                                )
+                                items.append(item)
+                                if self.debug:
+                                    print(f"    ✓ Found multi-price item: {name_part} {quantity}x{unit_price:.2f} = {total_price:.2f}")
+            except:
+                pass
+        
+        return items
+    
+    def _find_total(self, text: str) -> float:
+        """Find the total amount in the receipt"""
+        for pattern in self.PATTERNS['total_patterns']:
+            matches = re.finditer(pattern, text, re.IGNORECASE | re.MULTILINE)
+            for match in matches:
+                total = self._clean_price(match.group(1))
+                if total > 0:
+                    if self.debug:
+                        print(f"  Found total: {total:.2f}")
+                    return total
+        return 0.0
+    
+    def _detect_currency(self, text: str) -> str:
+        """Detect currency used in receipt"""
+        bg_indicators = len(re.findall(r'лв|Г|Б|BGN', text, re.IGNORECASE))
+        usd_indicators = len(re.findall(r'\$|USD', text, re.IGNORECASE))
+        eur_indicators = len(re.findall(r'€|EUR', text, re.IGNORECASE))
+        
+        if bg_indicators > max(usd_indicators, eur_indicators):
+            return 'BGN'
+        elif usd_indicators > eur_indicators:
+            return 'USD'
+        elif eur_indicators > 0:
+            return 'EUR'
+        else:
+            return 'BGN'
     
     def _similarity_score(self, str1: str, str2: str) -> float:
         """Calculate similarity score between two strings (0-1)"""
         return SequenceMatcher(None, str1.lower(), str2.lower()).ratio()
     
-    def _are_items_similar(self, item1: ReceiptItem, item2: ReceiptItem, 
-                           name_threshold: float = 0.85, 
-                           price_threshold: float = 0.01) -> bool:
-        """Check if two items are likely duplicates"""
-        
-        name1 = self._normalize_item_name(item1.name)
-        name2 = self._normalize_item_name(item2.name)
-        
-        # Check exact match first
-        if name1 == name2 and abs(item1.price - item2.price) < price_threshold:
-            return True
-        
-        # Check similarity for near-matches (OCR errors)
-        name_similarity = self._similarity_score(name1, name2)
-        price_match = abs(item1.price - item2.price) < price_threshold
-        
-        # If names are very similar and prices match, likely duplicate
-        if name_similarity >= name_threshold and price_match:
-            return True
-        
-        # Check if one name contains the other (partial OCR reads)
-        if len(name1) > 3 and len(name2) > 3:
-            if (name1 in name2 or name2 in name1) and price_match:
-                return True
-        
-        return False
-    
-    def _merge_duplicate_items(self, items: List[ReceiptItem]) -> List[ReceiptItem]:
-        """Merge duplicate items by increasing quantity"""
-        if not items:
-            return []
+    def _merge_similar_items(self, items: List[ReceiptItem]) -> List[ReceiptItem]:
+        """Merge items that are likely duplicates (from OCR errors or overlapping regions)"""
+        if len(items) <= 1:
+            return items
         
         merged = []
         processed = set()
@@ -96,7 +201,7 @@ class ReceiptParser:
             if i in processed:
                 continue
             
-            merged_item = ReceiptItem(
+            current_item = ReceiptItem(
                 id=item1.id,
                 name=item1.name,
                 quantity=item1.quantity,
@@ -110,99 +215,93 @@ class ReceiptParser:
                 if j in processed:
                     continue
                 
-                if self._are_items_similar(item1, item2):
-                    merged_item.quantity = item2.quantity
+                name_similarity = self._similarity_score(item1.name, item2.name)
+                price_similarity = abs(item1.price - item2.price) < 0.5
+                
+                if name_similarity > 0.85 and price_similarity:
+                    current_item.quantity += item2.quantity
+                    current_item.price = current_item.unit_price * current_item.quantity
                     processed.add(j)
+                    if self.debug:
+                        print(f"  Merged similar items: '{item1.name}' + '{item2.name}'")
             
-            merged.append(merged_item)
+            merged.append(current_item)
             processed.add(i)
         
         return merged
     
-    def _deduplicate_by_position(self, text: str) -> str:
-        """Remove duplicate lines that appear close together (from overlapping regions)"""
-        lines = text.split('\n')
-        cleaned_lines = []
-        previous_lines = []
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            
-            is_duplicate = False
-            for prev_line in previous_lines[-3:]:
-                if self._similarity_score(line, prev_line) > 0.9:
-                    is_duplicate = True
-                    break
-            
-            if not is_duplicate:
-                cleaned_lines.append(line)
-                previous_lines.append(line)
-        
-        return '\n'.join(cleaned_lines)
-    
     def parse(self, ocr_text: str) -> Receipt:
-        """Parse OCR text to extract receipt items"""
-        ocr_text = self._deduplicate_by_position(ocr_text)
+        """Parse OCR text to extract receipt items and total"""
+        if self.debug:
+            print("\n🔍 Starting receipt parsing...")
+            print(f"OCR text length: {len(ocr_text)} characters")
+        
+        self.receipt = Receipt()
+        self.item_id_counter = 0
+        
+        self.receipt.currency = self._detect_currency(ocr_text)
+        if self.debug:
+            print(f"Detected currency: {self.receipt.currency}")
         
         lines = ocr_text.split('\n')
-        self.raw_items = []
+        all_items = []
         
-        for line in lines:
-            line = line.strip()
-            if not line:
+        for line_num, line in enumerate(lines, 1):
+            if not line.strip():
                 continue
             
-            for pattern_name in ['bg_item', 'en_item']:
-                match = re.search(self.PATTERNS[pattern_name], line, re.IGNORECASE)
-                if match:
-                    name = match.group(1).strip()
-                    quantity = int(match.group(2)) if match.group(2) else 1
-                    unit_price = self._clean_price(match.group(3))
-                    total_price = self._clean_price(match.group(4))
-                    
-                    if self._is_valid_item_name(name) and total_price > 0:
-                        item = ReceiptItem(
-                            id=self._generate_item_id(),
-                            name=name,
-                            quantity=quantity,
-                            unit_price=unit_price or (total_price / quantity),
-                            price=total_price
-                        )
-                        self.raw_items.append(item)
-                        break
-            else:
-                match = re.search(self.PATTERNS['simple_item'], line, re.IGNORECASE)
-                if match:
-                    name = match.group(1).strip()
-                    price = self._clean_price(match.group(2))
-                    
-                    if self._is_valid_item_name(name) and price > 0:
-                        item = ReceiptItem(
-                            id=self._generate_item_id(),
-                            name=name,
-                            quantity=1,
-                            unit_price=price,
-                            price=price
-                        )
-                        self.raw_items.append(item)
-            
-            for pattern_name in ['bg_total', 'en_total']:
-                match = re.search(self.PATTERNS[pattern_name], line, re.IGNORECASE)
-                if match:
-                    total = self._clean_price(match.group(1))
-                    if total > 0:
-                        self.receipt.total = total
-                        self.receipt.original_total = total
-                        break
+            items = self._extract_items_from_line(line)
+            all_items.extend(items)
         
-        self.receipt.items = self._merge_duplicate_items(self.raw_items)
+        if all_items:
+            self.receipt.items = self._merge_similar_items(all_items)
+        else:
+            if self.debug:
+                print("  ⚠ No items found with current patterns")
+                print("  💡 Trying fallback extraction...")
+            
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                price_matches = re.findall(r'([\d,\.]+)', line)
+                for price_str in price_matches:
+                    price = self._clean_price(price_str)
+                    if 1.0 <= price <= 500:
+                        name_part = line.split(price_str)[0].strip()
+                        name_part = re.sub(r'^[\d\s\-\*]+', '', name_part).strip()  # Remove leading numbers
+                        
+                        if len(name_part) > 2 and self._is_valid_item_name(name_part):
+                            item = ReceiptItem(
+                                id=self._generate_item_id(),
+                                name=name_part,
+                                quantity=1,
+                                unit_price=price,
+                                price=price
+                            )
+                            self.receipt.items.append(item)
+                            if self.debug:
+                                print(f"    ⚡ Fallback item: {name_part} = {price:.2f}")
+                            break
+        
+        # Find total
+        self.receipt.total = self._find_total(ocr_text)
+        self.receipt.original_total = self.receipt.total
         
         if self.receipt.total == 0 and self.receipt.items:
             self.receipt.calculate_total()
+            if self.debug:
+                print(f"  Calculated total from items: {self.receipt.total:.2f}")
         
-        if len(self.raw_items) > len(self.receipt.items):
-            print(f"  Deduplication: {len(self.raw_items)} raw items → {len(self.receipt.items)} unique items")
+        if self.debug:
+            print(f"\n📊 Parsing Results:")
+            print(f"  Items found: {len(self.receipt.items)}")
+            print(f"  Total: {self.receipt.total:.2f} {self.receipt.currency}")
+            
+            if self.receipt.items:
+                print("  Items:")
+                for item in self.receipt.items:
+                    print(f"    • {item.name}: {item.price:.2f}")
         
         return self.receipt
