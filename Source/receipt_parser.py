@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Receipt Parser module for Groupify - FIXED VERSION
 Parses OCR text to extract receipt items and totals with better Bulgarian support
@@ -130,10 +129,10 @@ class ReceiptParser:
         if qty_match:
             name = qty_match.group(1).strip()
             quantity = int(qty_match.group(2))
-            unit_price = self._clean_price(qty_match.group(3))
-            total_price = unit_price * quantity
+            total_price = self._clean_price(qty_match.group(3))
+            unit_price = total_price / quantity if quantity > 0 else total_price
             
-            if self._is_valid_item_name(name) and unit_price > 0:
+            if self._is_valid_item_name(name) and total_price > 0:
                 item = ReceiptItem(
                     id=self._generate_item_id(),
                     name=name,
