@@ -39,7 +39,7 @@ class ReceiptParser:
         if not price_str:
             return 0.0
         
-        # Remove non-digit, non-decimal characters
+        # Remove non-digit n non-decimal characters
         cleaned = re.sub(r'[^\d,\.]', '', str(price_str))
         
         # European format (comma as decimal separator)
@@ -51,7 +51,7 @@ class ReceiptParser:
         
         try:
             price = float(cleaned)
-            # prices be reasonable
+            # prices reasonable
             if ITEM_PRICE_MIN <= price <= ITEM_PRICE_MAX:
                 return price
         except (ValueError, TypeError):
@@ -153,7 +153,7 @@ class ReceiptParser:
                 )
                 items.append(item)
                 if self.debug:
-                    print(f"    ✓ Found qty item (xN format): {name} {quantity}x{unit_price:.2f} = {total_price:.2f}")
+                    print(f"    ✓ Found quantity x price item (xN format): {name} {quantity}x{unit_price:.2f} = {total_price:.2f}")
                 return items
 
         # Pattern 2: Number Item - Price
@@ -280,6 +280,7 @@ class ReceiptParser:
         if self.debug:
             lines_before = len([l for l in ocr_text.split('\n') if l.strip()])
             lines_after = len([l for l in cleaned_text.split('\n') if l.strip()])
+            
             if lines_before != lines_after:
                 print(f"Deduplicated lines: {lines_before} → {lines_after}")
         

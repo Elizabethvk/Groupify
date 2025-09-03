@@ -57,7 +57,7 @@ class ParallelOCRProcessor:
         # Apply sharpening
         image = image.filter(ImageFilter.SHARPEN)
         
-        # Remove noise with bilateral filter (using OpenCV)
+        # Remove noise with bilateral filter (OpenCV)
         img_array = np.array(image)
         img_array = cv2.bilateralFilter(img_array, 9, 75, 75)
         image = Image.fromarray(img_array)
@@ -85,7 +85,6 @@ class ParallelOCRProcessor:
         print(f"  Worker {region_id + 1}: Processing region...")
         
         try:
-            # Perform OCR
             text = pytesseract.image_to_string(
                 region_image,
                 lang=self._get_ocr_language(),
@@ -100,7 +99,7 @@ class ParallelOCRProcessor:
     def process_image_parallel(self, image_path: str) -> str:
         """Process image with parallel OCR workers"""
         start_time = time.time()
-        print(f"\n🚀 Starting parallel OCR with {self.num_workers} workers...")
+        print(f"\nStarting parallel OCR with {self.num_workers} workers...")
         
         if not validate_image_path(image_path):
             raise ValueError(f"Invalid or unsupported image: {image_path}")

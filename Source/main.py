@@ -12,6 +12,7 @@ import argparse
 from ocr_processor import ParallelOCRProcessor
 from receipt_parser import ReceiptParser
 from cli_interface import GroupifyCLI
+
 from utils import validate_image_path
 from config import WORKERS_MIN, WORKERS_MAX
 
@@ -74,7 +75,7 @@ Examples:
     parser.add_argument(
         '--version',
         action='version',
-        version='Groupify 1.8'
+        version='Groupify 2.0'
     )
     
     args = parser.parse_args()

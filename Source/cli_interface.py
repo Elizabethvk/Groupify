@@ -70,7 +70,7 @@ class GroupifyCLI:
         print(f"Processing Time:  {metrics.processing_time:.2f}s")
         print(f"Speedup Factor:   {metrics.speedup_factor:.1f}x")
         print(f"Items Detected:   {len(self.receipt.items) if self.receipt else 0}")
-        print(f"Regions Processed: {m.regions_processed}")
+        print(f"Regions Processed: {metrics.regions_processed}")
     
     def manage_people(self):
         """Manage people for bill splitting"""
