@@ -7,25 +7,23 @@ python3 main.py receipt.jpg --quick      # Quick mode - just show results
 python3 main.py --help                   # Show help
 """
 
-import os
 import sys
 import argparse
 from ocr_processor import ParallelOCRProcessor
 from receipt_parser import ReceiptParser
 from cli_interface import GroupifyCLI
+from utils import validate_image_path
 
 def quick_process(image_path: str, workers: int = 4):
-    """Quick processing mode - just show results"""
-    print(f"🚀 Quick processing: {image_path}")
+    """Quick processing mode - showing results only"""
+    print(f"Quick processing: {image_path}")
     
     processor = ParallelOCRProcessor(num_workers=workers)
     parser = ReceiptParser()
     
-    # Process image
     ocr_text = processor.process_image_parallel(image_path)
     receipt = parser.parse(ocr_text)
     
-    # Display results
     if receipt.items:
         print(f"\n📋 Found {len(receipt.items)} items:")
         for i, item in enumerate(receipt.items, 1):
@@ -33,27 +31,26 @@ def quick_process(image_path: str, workers: int = 4):
         print(f"\n💰 Total: {receipt.total:.2f} {receipt.currency}")
         
         m = processor.metrics
-        print(f"\n⚡ Processed in {m.processing_time:.2f}s using {m.workers_used} workers")
+        print(f"\n  Processed in {m.processing_time:.2f}s using {m.workers_used} workers")
         print(f"   Speedup: {m.speedup_factor:.1f}x")
     else:
         print("\n⚠ No items found in receipt")
         print("Try:")
         print("  • Better image quality/lighting")
-        print("  • Different OCR settings")
-        print("  • Manual item entry in interactive mode")
+        print("  • Manual item entry")
 
 
 def main():
-    """Main entry point"""
+    """Main entry"""
     parser = argparse.ArgumentParser(
         description='Groupify - Smart Bill Splitter with Parallel OCR',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py                    # Interactive mode
-  python main.py receipt.jpg        # Process image then interactive
-  python main.py receipt.jpg --quick # Quick mode - show results only
-  python main.py --workers 8        # Use 8 parallel workers
+  python3 main.py                     # Interactive mode
+  python3 main.py receipt.jpg         # Process image then interactive
+  python3 main.py receipt.jpg --quick # Quick mode - show results only
+  python3 main.py --workers 8         # Use 8 parallel workers
         """
     )
     
@@ -76,7 +73,7 @@ Examples:
     parser.add_argument(
         '--version',
         action='version',
-        version='Groupify 1.0'
+        version='Groupify 1.8'
     )
     
     args = parser.parse_args()
@@ -86,8 +83,8 @@ Examples:
         args.workers = max(1, min(16, args.workers))
     
     if args.quick and args.image:
-        if not os.path.exists(args.image):
-            print(f"❌ File not found: {args.image}")
+        if not validate_image_path(args.image):
+            print(f"⚠ Invalid or unsupported image: {args.image}")
             sys.exit(1)
         
         quick_process(args.image, args.workers)
@@ -97,10 +94,10 @@ Examples:
     cli.processor = ParallelOCRProcessor(num_workers=args.workers)
     
     if args.image:
-        if os.path.exists(args.image):
+        if validate_image_path(args.image):
             cli.process_receipt(args.image)
         else:
-            print(f"⚠ File not found: {args.image}")
+            print(f"⚠ Invalid or unsupported image: {args.image}")
     
     cli.run()
 
@@ -112,7 +109,7 @@ if __name__ == "__main__":
         print("\n\n👋 Goodbye!")
         sys.exit(0)
     except Exception as e:
-        print(f"\n❌ An error occurred: {e}")
+        print(f"\nRrror occurred: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

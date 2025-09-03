@@ -12,6 +12,7 @@ import cv2
 import pytesseract
 
 from data_models import ProcessingMetrics
+from utils import validate_image_path
 
 
 class ParallelOCRProcessor:
@@ -99,7 +100,8 @@ class ParallelOCRProcessor:
         start_time = time.time()
         print(f"\n🚀 Starting parallel OCR with {self.num_workers} workers...")
         
-        # Load and preprocess image
+        if not validate_image_path(image_path):
+            raise ValueError(f"Invalid or unsupported image: {image_path}")
         image = Image.open(image_path)
         print(f"📷 Image loaded: {image.size[0]}x{image.size[1]} pixels")
         

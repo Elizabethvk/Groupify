@@ -3,16 +3,13 @@ CLI Interface module for Groupify
 Command-line interface for receipt processing and bill splitting
 """
 
-import os
 import json
 from datetime import datetime
 from dataclasses import asdict
-
-from data_models import Receipt, ReceiptItem, Settlement
 from ocr_processor import ParallelOCRProcessor
 from receipt_parser import ReceiptParser
 from bill_splitter import BillSplitter
-
+from utils import validate_image_path, try_parse_float, validate_menu_choice
 
 class GroupifyCLI:
     """Command-line interface for Groupify"""
@@ -27,8 +24,8 @@ class GroupifyCLI:
     def display_banner(self):
         """Display application banner"""
         print("\n" + "="*60)
-        print("🍽️  GROUPIFY - Smart Bill Splitter")
-        print("    Parallel Receipt Processing & Optimization")
+        print("🍽️  GROUPIFY - Bill Splitter")
+        print("Parallel Receipt Processing & Optimization")
         print("="*60)
     
     def process_receipt(self, image_path: str):
@@ -89,6 +86,8 @@ class GroupifyCLI:
             print("5. Done")
             
             choice = input("\nChoice: ").strip()
+            print("-"*50)
+            choice = validate_menu_choice(choice, ['1','2','3','4','5']) or ''
             
             if choice == '1':
                 name = input("Enter name: ").strip()
@@ -142,6 +141,8 @@ class GroupifyCLI:
             print("3. Skip")
             
             choice = input("Choice: ").strip()
+            print("-"*50)
+            choice = validate_menu_choice(choice, ['1','2','3']) or ''
             
             if choice == '1':
                 item.assigned_to = self.people.copy()
@@ -202,7 +203,11 @@ class GroupifyCLI:
             return
         
         try:
-            tip = float(input("\nEnter tip amount: "))
+            tip_input = input("\nEnter tip amount: ")
+            tip_val = try_parse_float(tip_input)
+            if tip_val is None or tip_val < 0:
+                raise ValueError("Invalid tip")
+            tip = tip_val
             self.receipt.add_tip(tip)
             print(f"✓ Added tip: {tip:.2f} {self.receipt.currency}")
             print(f"New total: {self.receipt.total:.2f} {self.receipt.currency}")
@@ -242,13 +247,10 @@ class GroupifyCLI:
         }
         
         if self.splitter:
-            # Individual balances
             individual_balances = self.splitter.balances if hasattr(self.splitter, 'balances') else {}
             
-            # Equal share calculation
             equal_share = self.receipt.total / len(self.people) if self.people else 0
             
-            # Settlement transactions
             settlements = [asdict(s) for s in self.splitter.settlements] if hasattr(self.splitter, 'settlements') else []
             
             data['settlement_analysis'] = {
@@ -328,7 +330,7 @@ class GroupifyCLI:
             print(f"  • Processing metrics")
             
         except Exception as e:
-            print(f"\n❌ Export failed: {e}")
+            print(f"\nExport failed: {e}")
     
     def run(self):
         """Run the CLI application"""
@@ -350,10 +352,10 @@ class GroupifyCLI:
             
             if choice == '1':
                 image_path = input("Enter image path: ").strip()
-                if os.path.exists(image_path):
+                if validate_image_path(image_path):
                     self.process_receipt(image_path)
                 else:
-                    print("⚠ File not found")
+                    print("⚠ Invalid or unsupported image")
             elif choice == '2':
                 self.manage_people()
             elif choice == '3':

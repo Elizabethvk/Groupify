@@ -4,9 +4,12 @@ Parses OCR text to extract receipt items and totals with better Bulgarian suppor
 """
 
 import re
-import time
-from typing import List, Tuple
+import uuid
+import os
+from concurrent.futures import ThreadPoolExecutor
+from typing import List
 from difflib import SequenceMatcher
+
 from data_models import Receipt, ReceiptItem
 from constants import TOTAL_SUM_PATTERNS, SKIP_WORDS
 
@@ -19,9 +22,8 @@ class ReceiptParser:
         self.debug = True
     
     def _generate_item_id(self) -> str:
-        """Generate unique item ID"""
-        self.item_id_counter += 1
-        return f"item_{self.item_id_counter}_{int(time.time() * 1000)}"
+        """Generate unique item ID (thread-safe)"""
+        return f"item_{uuid.uuid4().hex}"
     
     def _clean_price(self, price_str: str) -> float:
         """Clean and convert price string to float"""
@@ -61,7 +63,7 @@ class ReceiptParser:
         
         normalized_name = self._normalize_text(name)
         
-        for skip_word in self.SKIP_WORDS:
+        for skip_word in SKIP_WORDS:
             if skip_word in normalized_name:
                 return False
         
@@ -231,7 +233,7 @@ class ReceiptParser:
     
     def _find_total(self, text: str) -> float:
         """Find the total amount in the receipt"""
-        for pattern in self.TOTAL_SUM_PATTERNS:
+        for pattern in TOTAL_SUM_PATTERNS:
             matches = re.finditer(pattern, text, re.IGNORECASE | re.MULTILINE)
             for match in matches:
                 total = self._clean_price(match.group(1))
@@ -276,15 +278,15 @@ class ReceiptParser:
         if self.debug:
             print(f"Detected currency: {self.receipt.currency}")
         
-        lines = cleaned_text.split('\n')
-        all_items = []
+        lines = [l for l in cleaned_text.split('\n') if l.strip()]
+        all_items: List[ReceiptItem] = []
         
-        for line_num, line in enumerate(lines, 1):
-            if not line.strip():
-                continue
-            
-            items = self._extract_items_from_line(line)
-            all_items.extend(items)
+        # Parallel line parsing
+        max_workers = max(1, min(8, (os.cpu_count() or 4)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for result in executor.map(self._extract_items_from_line, lines):
+                if result:
+                    all_items.extend(result)
         
         self.receipt.items = all_items
         

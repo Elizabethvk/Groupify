@@ -3,8 +3,7 @@ Data models for Groupify - Receipt processing and bill splitting
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
-
+from typing import List
 
 @dataclass
 class ReceiptItem:
